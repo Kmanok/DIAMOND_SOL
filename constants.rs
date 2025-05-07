@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 
 // Token configuration
-pub const DECIMALS: u8 = 9;
+pub const DECIMALS: u8 = 6;
 pub const USDT_DECIMALS: u8 = 6;
 pub const USDC_DECIMALS: u8 = 6;
 pub const SOL_DECIMALS: u8 = 9;
@@ -9,7 +9,7 @@ pub const INITIAL_SUPPLY: u64 = 8_000_000 * 10u64.pow(DECIMALS as u32); // 8 mil
 pub const MAX_SUPPLY: u64 = 100_000_000 * 10u64.pow(DECIMALS as u32); // 100 million tokens
 
 // Pricing
-pub const TOKEN_PRICE_USDT: u64 = 1_000_000; // 1 USDT
+pub const TOKEN_PRICE_USDT: u64 = 800_000; // 0.8 USDT
 pub const TOKEN_PRICE_USDC: u64 = 800_000; // 0.8 USDC
 pub const TOKEN_PRICE_SOL: u64 = 0; // To be set based on oracle price
 pub const MIN_PURCHASE_AMOUNT: u64 = 1_000_000; // 1 USDT
