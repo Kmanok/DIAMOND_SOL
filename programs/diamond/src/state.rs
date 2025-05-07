@@ -1,17 +1,16 @@
 use anchor_lang::prelude::*;
-use solana_program::program_pack::Pack;
 
 #[account]
 pub struct TokenState {
-    pub authority: Pubkey,      // 32 bytes
-    pub mint: Pubkey,          // 32 bytes
-    pub total_supply: u64,     // 8 bytes
-    pub max_supply: u64,       // 8 bytes
-    pub is_paused: bool,       // 1 byte
+    pub authority: Pubkey,         // 32 bytes
+    pub mint: Pubkey,              // 32 bytes
+    pub total_supply: u64,         // 8 bytes
+    pub max_supply: u64,           // 8 bytes
+    pub is_paused: bool,           // 1 byte
     pub last_pause_timestamp: i64, // 8 bytes
-    pub multisig: Pubkey,      // 32 bytes
-    pub vault: Pubkey,         // 32 bytes
-    pub bump: u8,              // 1 byte
+    pub multisig: Pubkey,          // 32 bytes
+    pub vault: Pubkey,             // 32 bytes
+    pub bump: u8,                  // 1 byte
 }
 
 impl TokenState {
@@ -34,7 +33,7 @@ impl TokenState {
 #[account]
 pub struct Blacklist {
     pub addresses: Vec<Pubkey>, // Vector of blacklisted addresses
-    pub bump: u8,              // 1 byte
+    pub bump: u8,               // 1 byte
 }
 
 impl Blacklist {
@@ -44,4 +43,4 @@ impl Blacklist {
         max_addresses * 32 + // addresses
         1 // bump
     }
-} 
+}

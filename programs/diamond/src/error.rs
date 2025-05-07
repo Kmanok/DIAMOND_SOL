@@ -79,4 +79,4 @@ pub enum DiamondTokenError {
 
     #[msg("Token is not paused")]
     NotPaused,
-} 
+}

@@ -29,4 +29,4 @@ pub const PAUSE_COOLDOWN: i64 = 900; // 15 minutes in seconds
 pub const TOKEN_STATE_SEED: &[u8] = b"token_state";
 pub const BLACKLIST_SEED: &[u8] = b"blacklist";
 pub const VAULT_SEED: &[u8] = b"vault";
-pub const MULTISIG_SEED: &[u8] = b"multisig"; 
+pub const MULTISIG_SEED: &[u8] = b"multisig";

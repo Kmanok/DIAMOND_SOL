@@ -71,4 +71,4 @@ pub struct ReserveVerified {
     pub expected_usdt: u64,
     pub actual_usdt: u64,
     pub timestamp: i64,
-} 
+}

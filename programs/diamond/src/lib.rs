@@ -1,12 +1,11 @@
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::{program::invoke, system_instruction, clock::Clock, program_pack::Pack};
+use anchor_lang::solana_program::clock::Clock;
 use anchor_spl::{
     associated_token::AssociatedToken,
-    token::{Mint as TokenMint, Token, TokenAccount as SplTokenAccount, Transfer},
+    token::{Token, Transfer},
+    token_interface::{Mint, TokenAccount, TokenInterface, TransferChecked},
 };
 use pyth_sdk_solana::{load_price_feed_from_account_info, state::PriceStatus};
-use spl_token::state::Account;
-use std::str::FromStr;
 
 declare_id!("ETxyc4UGXCvczNaZDXNiGT3FjUPKBERRqW5NgvrzL6Vz");
 
@@ -32,28 +31,6 @@ pub mod diamond_token {
             DiamondTokenError::InvalidMultisigThreshold
         );
 
-        // Validate token state PDA
-        let (token_state_pda, token_state_bump) = Pubkey::find_program_address(
-            &[TOKEN_STATE_SEED],
-            program_id,
-        );
-        require_keys_eq!(
-            ctx.accounts.token_state.key(),
-            token_state_pda,
-            DiamondTokenError::InvalidTokenState
-        );
-
-        // Validate blacklist PDA
-        let (blacklist_pda, blacklist_bump) = Pubkey::find_program_address(
-            &[BLACKLIST_SEED],
-            program_id,
-        );
-        require_keys_eq!(
-            ctx.accounts.blacklist.key(),
-            blacklist_pda,
-            DiamondTokenError::InvalidBlacklist
-        );
-
         // Initialize token state
         let token_state = &mut ctx.accounts.token_state;
         token_state.authority = ctx.accounts.payer.key();
@@ -64,18 +41,15 @@ pub mod diamond_token {
         token_state.last_pause_timestamp = 0;
         token_state.multisig = ctx.accounts.multisig.key();
         token_state.vault = ctx.accounts.vault.key();
-        token_state.bump = token_state_bump;
+        token_state.bump = ctx.bumps.token_state;
 
         // Initialize blacklist
         let blacklist = &mut ctx.accounts.blacklist;
         blacklist.addresses = Vec::new();
-        blacklist.bump = blacklist_bump;
+        blacklist.bump = ctx.bumps.blacklist;
 
         // Mint initial supply to vault
-        let token_state_seeds = &[
-            TOKEN_STATE_SEED,
-            &[token_state.bump],
-        ];
+        let token_state_seeds = &[TOKEN_STATE_SEED, &[token_state.bump]];
         let signer = &[&token_state_seeds[..]];
 
         let mint_ctx = CpiContext::new_with_signer(
@@ -103,12 +77,9 @@ pub mod diamond_token {
 
     pub fn mint_by_user(ctx: Context<MintByUser>, amount: u64) -> Result<()> {
         let token_state = &mut ctx.accounts.token_state;
-        
+
         // Validate amount is not zero
-        require!(
-            amount > 0,
-            DiamondTokenError::InvalidAmount
-        );
+        require!(amount > 0, DiamondTokenError::InvalidAmount);
 
         // Check blacklist
         let blacklist = &ctx.accounts.blacklist;
@@ -134,11 +105,11 @@ pub mod diamond_token {
                     .checked_mul(TOKEN_PRICE_USDT)
                     .ok_or(DiamondTokenError::MathOverflow)?;
                 require!(
-                    amount >= MIN_PURCHASE_USDT,
+                    amount >= MIN_PURCHASE_USDC,
                     DiamondTokenError::PurchaseAmountTooSmall
                 );
                 amount
-            },
+            }
             USDC_DECIMALS => {
                 let amount = amount
                     .checked_mul(TOKEN_PRICE_USDC)
@@ -148,12 +119,12 @@ pub mod diamond_token {
                     DiamondTokenError::PurchaseAmountTooSmall
                 );
                 amount
-            },
+            }
             SOL_DECIMALS => {
                 // Get SOL price from Pyth oracle
                 let price_feed = load_price_feed_from_account_info(&ctx.accounts.sol_price_feed)
                     .map_err(|_| DiamondTokenError::InvalidPriceFeed)?;
-                
+
                 // Check price status
                 require!(
                     price_feed.get_current_price().status == PriceStatus::Trading,
@@ -178,7 +149,7 @@ pub mod diamond_token {
                 );
 
                 sol_amount
-            },
+            }
             _ => return Err(DiamondTokenError::InvalidDecimals.into()),
         };
 
@@ -187,7 +158,7 @@ pub mod diamond_token {
             .total_supply
             .checked_add(amount)
             .ok_or(DiamondTokenError::MathOverflow)?;
-        
+
         require!(
             new_supply <= token_state.max_supply,
             DiamondTokenError::MaxSupplyExceeded
@@ -202,16 +173,13 @@ pub mod diamond_token {
                 authority: ctx.accounts.user.to_account_info(),
             },
         );
-        
+
         anchor_spl::token::transfer(transfer_ctx, payment_amount)?;
 
         // Mint tokens to user
-        let token_state_seeds = &[
-            TOKEN_STATE_SEED,
-            &[token_state.bump],
-        ];
+        let token_state_seeds = &[TOKEN_STATE_SEED, &[token_state.bump]];
         let signer = &[&token_state_seeds[..]];
-        
+
         let mint_ctx = CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
             anchor_spl::token::MintTo {
@@ -221,7 +189,7 @@ pub mod diamond_token {
             },
             signer,
         );
-        
+
         anchor_spl::token::mint_to(mint_ctx, amount)?;
 
         // Update state
@@ -242,83 +210,69 @@ pub mod diamond_token {
         let token_state = &mut ctx.accounts.token_state;
         let mint = &ctx.accounts.mint;
         let vault = &ctx.accounts.vault;
-        
+
         // Verify admin signature
         require!(
             token_state.is_admin(&ctx.accounts.admin.to_account_info().key()),
             DiamondTokenError::NotAuthorized
         );
-        
+
         // Verify amount
         require!(amount > 0, DiamondTokenError::InvalidAmount);
-        
+
         // Verify vault has enough tokens
-        require!(
-            vault.amount >= amount,
-            DiamondTokenError::InsufficientFunds
-        );
-        
+        require!(vault.amount >= amount, DiamondTokenError::InsufficientFunds);
+
         // Burn tokens from vault
-        let burn_ix = spl_token::instruction::burn(
-            &spl_token::id(),
-            &vault.key(),
-            &mint.key(),
-            &token_state.key(),
-            &[],
+        anchor_spl::token::burn(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                anchor_spl::token::Burn {
+                    mint: mint.to_account_info(),
+                    from: vault.to_account_info(),
+                    authority: token_state.to_account_info(),
+                },
+            ),
             amount,
         )?;
-        
-        invoke(
-            &burn_ix,
-            &[
-                vault.to_account_info(),
-                mint.to_account_info(),
-                token_state.to_account_info(),
-            ],
-        )?;
-        
+
         // Update total supply
-        token_state.total_supply = token_state.total_supply.checked_sub(amount)
+        token_state.total_supply = token_state
+            .total_supply
+            .checked_sub(amount)
             .ok_or(DiamondTokenError::ArithmeticOverflow)?;
-        
+
         // If premint account exists, burn from it too
         if let Some(premint) = &ctx.accounts.premint_account {
             if premint.amount > 0 {
-                let burn_ix = spl_token::instruction::burn(
-                    &spl_token::id(),
-                    &premint.key(),
-                    &mint.key(),
-                    &token_state.key(),
-                    &[],
+                anchor_spl::token::burn(
+                    CpiContext::new(
+                        ctx.accounts.token_program.to_account_info(),
+                        anchor_spl::token::Burn {
+                            mint: mint.to_account_info(),
+                            from: premint.to_account_info(),
+                            authority: token_state.to_account_info(),
+                        },
+                    ),
                     premint.amount,
                 )?;
-                
-                invoke(
-                    &burn_ix,
-                    &[
-                        premint.to_account_info(),
-                        mint.to_account_info(),
-                        token_state.to_account_info(),
-                    ],
-                )?;
-                
+
                 // Update total supply again
-                token_state.total_supply = token_state.total_supply.checked_sub(premint.amount)
+                token_state.total_supply = token_state
+                    .total_supply
+                    .checked_sub(premint.amount)
                     .ok_or(DiamondTokenError::ArithmeticOverflow)?;
             }
         }
-        
+
         Ok(())
     }
 
     pub fn pause(ctx: Context<Pause>) -> Result<()> {
         let token_state = &mut ctx.accounts.token_state;
-        
+
         // Check if already paused
-        require!(
-            !token_state.is_paused,
-            DiamondTokenError::AlreadyPaused
-        );
+        require!(!token_state.is_paused, DiamondTokenError::AlreadyPaused);
 
         // Update state
         token_state.is_paused = true;
@@ -336,18 +290,15 @@ pub mod diamond_token {
     pub fn unpause(ctx: Context<Unpause>) -> Result<()> {
         let token_state = &mut ctx.accounts.token_state;
         let current_time = Clock::get()?.unix_timestamp;
-        
+
         // Check if already unpaused
-        require!(
-            token_state.is_paused,
-            DiamondTokenError::NotPaused
-        );
+        require!(token_state.is_paused, DiamondTokenError::NotPaused);
 
         // Check cooldown period
         let time_since_pause = current_time
             .checked_sub(token_state.last_pause_timestamp)
             .ok_or(DiamondTokenError::MathOverflow)?;
-        
+
         require!(
             time_since_pause >= PAUSE_COOLDOWN,
             DiamondTokenError::PauseCooldownNotElapsed
@@ -367,7 +318,7 @@ pub mod diamond_token {
 
     pub fn update_max_supply(ctx: Context<UpdateMaxSupply>, new_max_supply: u64) -> Result<()> {
         let token_state = &mut ctx.accounts.token_state;
-        
+
         // Check if new supply is less than current max supply
         require!(
             new_max_supply < token_state.max_supply,
@@ -382,13 +333,15 @@ pub mod diamond_token {
 
         // Calculate minimum allowed max supply (current total supply)
         let min_allowed_supply = token_state.total_supply;
-        
+
         // Calculate maximum allowed reduction (50% of current max supply)
-        let max_reduction = token_state.max_supply
+        let max_reduction = token_state
+            .max_supply
             .checked_div(2)
             .ok_or(DiamondTokenError::MathOverflow)?;
-        
-        let min_allowed_max_supply = token_state.max_supply
+
+        let min_allowed_max_supply = token_state
+            .max_supply
             .checked_sub(max_reduction)
             .ok_or(DiamondTokenError::MathOverflow)?;
 
@@ -416,7 +369,7 @@ pub mod diamond_token {
 
     pub fn add_to_blacklist(ctx: Context<UpdateBlacklist>, address: Pubkey) -> Result<()> {
         let blacklist = &mut ctx.accounts.blacklist;
-        
+
         // Check if address is already blacklisted
         require!(
             !blacklist.addresses.contains(&address),
@@ -444,7 +397,7 @@ pub mod diamond_token {
 
     pub fn remove_from_blacklist(ctx: Context<UpdateBlacklist>, address: Pubkey) -> Result<()> {
         let blacklist = &mut ctx.accounts.blacklist;
-        
+
         // Check if address is in blacklist
         require!(
             blacklist.addresses.contains(&address),
@@ -510,14 +463,17 @@ pub mod diamond_token {
 
     pub fn on_transfer_hook(ctx: Context<TransferHook>, amount: u64) -> Result<()> {
         let blacklist = &ctx.accounts.blacklist;
-        
+
         // Check if source is blacklisted
         if blacklist.addresses.contains(&ctx.accounts.source.key()) {
             return Err(DiamondTokenError::SourceAddressBlacklisted.into());
         }
 
         // Check if destination is blacklisted
-        if blacklist.addresses.contains(&ctx.accounts.destination.key()) {
+        if blacklist
+            .addresses
+            .contains(&ctx.accounts.destination.key())
+        {
             return Err(DiamondTokenError::DestinationAddressBlacklisted.into());
         }
 
@@ -534,13 +490,13 @@ pub mod diamond_token {
     pub fn verify_reserve(ctx: Context<VerifyReserve>) -> Result<()> {
         let token_state = &ctx.accounts.token_state;
         let vault = &ctx.accounts.vault;
-        
+
         // Calculate expected USDT balance based on total supply
         let expected_usdt = token_state
             .total_supply
             .checked_mul(TOKEN_PRICE_USDT)
             .ok_or(DiamondTokenError::MathOverflow)?;
-        
+
         // Verify vault has sufficient USDT balance
         require!(
             vault.amount >= expected_usdt,
@@ -559,11 +515,18 @@ pub mod diamond_token {
     }
 }
 
+#[derive(Accounts)]
 pub struct Initialize<'info> {
     pub payer: Signer<'info>,
+
+    #[account(seeds = [TOKEN_STATE_SEED], bump)]
     pub token_state: Account<'info, TokenState>,
-    pub mint: UncheckedAccount<'info>,
+
+    pub mint: InterfaceAccount<'info, Mint>,
+
+    #[account(seeds = [BLACKLIST_SEED], bump)]
     pub blacklist: Account<'info, Blacklist>,
+
     pub multisig: UncheckedAccount<'info>,
     pub vault: UncheckedAccount<'info>,
     pub system_program: Program<'info, System>,
@@ -571,6 +534,7 @@ pub struct Initialize<'info> {
     pub rent: Sysvar<'info, Rent>,
 }
 
+#[derive(Accounts)]
 pub struct MintByUser<'info> {
     pub user: Signer<'info>,
     pub token_state: Account<'info, TokenState>,
@@ -585,6 +549,7 @@ pub struct MintByUser<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
 pub struct AdminBurn<'info> {
     pub authority: UncheckedAccount<'info>,
     pub token_state: Account<'info, TokenState>,
@@ -596,31 +561,39 @@ pub struct AdminBurn<'info> {
     pub token_program: Program<'info, Token>,
 }
 
+#[derive(Accounts)]
 pub struct Pause<'info> {
     pub authority: UncheckedAccount<'info>,
     pub token_state: Account<'info, TokenState>,
     pub multisig: UncheckedAccount<'info>,
 }
 
+#[derive(Accounts)]
 pub struct Unpause<'info> {
     pub authority: UncheckedAccount<'info>,
     pub token_state: Account<'info, TokenState>,
     pub multisig: UncheckedAccount<'info>,
 }
 
+#[derive(Accounts)]
 pub struct UpdateMaxSupply<'info> {
     pub authority: UncheckedAccount<'info>,
     pub token_state: Account<'info, TokenState>,
     pub multisig: UncheckedAccount<'info>,
 }
 
+#[derive(Accounts)]
 pub struct UpdateBlacklist<'info> {
     pub authority: UncheckedAccount<'info>,
     pub token_state: Account<'info, TokenState>,
+
+    #[account(seeds = [BLACKLIST_SEED], bump)]
     pub blacklist: Account<'info, Blacklist>,
+
     pub multisig: UncheckedAccount<'info>,
 }
 
+#[derive(Accounts)]
 pub struct PurchaseItem<'info> {
     pub user: Signer<'info>,
     pub token_state: Account<'info, TokenState>,
@@ -629,13 +602,17 @@ pub struct PurchaseItem<'info> {
     pub token_program: Program<'info, Token>,
 }
 
+#[derive(Accounts)]
 pub struct TransferHook<'info> {
+    #[account(seeds = [BLACKLIST_SEED], bump)]
     pub blacklist: Account<'info, Blacklist>,
+
     pub source: UncheckedAccount<'info>,
     pub destination: UncheckedAccount<'info>,
 }
 
+#[derive(Accounts)]
 pub struct VerifyReserve<'info> {
     pub token_state: Account<'info, TokenState>,
     pub vault: UncheckedAccount<'info>,
-} 
+}
