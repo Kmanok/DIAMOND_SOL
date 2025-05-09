@@ -1,19 +1,22 @@
 [toolchain]
 package_manager = "yarn"
-anchor_version = "0.31.0"
+anchor_version = "0.31.1"
 
 [features]
 seeds = false
 skip-lint = false
 
 [programs.localnet]
-diamond_token = "ETxyc4UGXCvczNaZDXNiGT3FjUPKBERRqW5NgvrzL6Vz"
+diamond = "97xUm7Kv6TiKyCkaLGgmTFu3skVte3wStYY4vYTXtpxL"
+
+[programs.devnet]
+diamond = "97xUm7Kv6TiKyCkaLGgmTFu3skVte3wStYY4vYTXtpxL"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "Localnet"
+cluster = "Devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
@@ -27,5 +30,5 @@ url = "http://127.0.0.1:8899"
 
 [workspace]
 members = [
-    "programs/diamond_token"
+    "programs/diamond"
 ]

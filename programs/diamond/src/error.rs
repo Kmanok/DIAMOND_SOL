@@ -79,4 +79,13 @@ pub enum DiamondTokenError {
 
     #[msg("Token is not paused")]
     NotPaused,
+
+    #[msg("Not authorized")]
+    NotAuthorized,
+
+    #[msg("Insufficient funds")]
+    InsufficientFunds,
+
+    #[msg("Arithmetic overflow")]
+    ArithmeticOverflow,
 }

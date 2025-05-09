@@ -2,12 +2,11 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::clock::Clock;
 use anchor_spl::{
     associated_token::AssociatedToken,
-    token::{Token, Transfer},
-    token_interface::{Mint, TokenAccount, TokenInterface, TransferChecked},
+    token::{Token, Transfer, Mint, TokenAccount},
 };
-use pyth_sdk_solana::{load_price_feed_from_account_info, state::PriceStatus};
+use pyth_sdk_solana::state::SolanaPriceAccount;
 
-declare_id!("ETxyc4UGXCvczNaZDXNiGT3FjUPKBERRqW5NgvrzL6Vz");
+declare_id!("97xUm7Kv6TiKyCkaLGgmTFu3skVte3wStYY4vYTXtpxL");
 
 pub mod constants;
 pub mod error;
@@ -17,7 +16,7 @@ pub mod state;
 use crate::{constants::*, error::*, events::*, state::*};
 
 #[program]
-pub mod diamond_token {
+pub mod diamond {
     use super::*;
 
     pub fn initialize(
@@ -100,20 +99,13 @@ pub mod diamond_token {
 
         // Calculate payment amount based on token type
         let payment_amount = match ctx.accounts.payment_token.decimals {
-            USDT_DECIMALS => {
-                let amount = amount
-                    .checked_mul(TOKEN_PRICE_USDT)
-                    .ok_or(DiamondTokenError::MathOverflow)?;
-                require!(
-                    amount >= MIN_PURCHASE_USDC,
-                    DiamondTokenError::PurchaseAmountTooSmall
-                );
-                amount
-            }
-            USDC_DECIMALS => {
-                let amount = amount
-                    .checked_mul(TOKEN_PRICE_USDC)
-                    .ok_or(DiamondTokenError::MathOverflow)?;
+            6 => { // USDT or USDC
+                let amount = if ctx.accounts.payment_token.key() == USDT_PUBKEY {
+                    amount.checked_mul(TOKEN_PRICE_USDT)
+                } else {
+                    amount.checked_mul(TOKEN_PRICE_USDC)
+                }.ok_or(DiamondTokenError::MathOverflow)?;
+                
                 require!(
                     amount >= MIN_PURCHASE_USDC,
                     DiamondTokenError::PurchaseAmountTooSmall
@@ -122,25 +114,16 @@ pub mod diamond_token {
             }
             SOL_DECIMALS => {
                 // Get SOL price from Pyth oracle
-                let price_feed = load_price_feed_from_account_info(&ctx.accounts.sol_price_feed)
+                let price_feed = SolanaPriceAccount::account_info_to_feed(&ctx.accounts.sol_price_feed)
                     .map_err(|_| DiamondTokenError::InvalidPriceFeed)?;
 
-                // Check price status
-                require!(
-                    price_feed.get_current_price().status == PriceStatus::Trading,
-                    DiamondTokenError::InvalidPriceFeed
-                );
-
-                // Check price age
                 let current_time = Clock::get()?.unix_timestamp;
-                require!(
-                    current_time - price_feed.get_current_price().publish_time <= MAX_PRICE_AGE,
-                    DiamondTokenError::StalePrice
-                );
+                let current_price = price_feed.get_price_no_older_than(current_time, MAX_PRICE_AGE as u64)
+                    .ok_or(DiamondTokenError::InvalidPriceFeed)?;
 
                 // Calculate SOL amount needed
                 let token_price_usd = 0.8; // 0.8 USD per token
-                let sol_price_usd = price_feed.get_current_price().price as f64 / 1e6;
+                let sol_price_usd = current_price.price as f64 / 10f64.powi(current_price.expo as i32);
                 let sol_amount = (amount as f64 * token_price_usd / sol_price_usd * 1e9) as u64;
 
                 require!(
@@ -331,9 +314,6 @@ pub mod diamond_token {
             DiamondTokenError::InvalidMaxSupply
         );
 
-        // Calculate minimum allowed max supply (current total supply)
-        let min_allowed_supply = token_state.total_supply;
-
         // Calculate maximum allowed reduction (50% of current max supply)
         let max_reduction = token_state
             .max_supply
@@ -517,32 +497,55 @@ pub mod diamond_token {
 
 #[derive(Accounts)]
 pub struct Initialize<'info> {
+    #[account(mut)]
     pub payer: Signer<'info>,
 
-    #[account(seeds = [TOKEN_STATE_SEED], bump)]
+    #[account(
+        init,
+        payer = payer,
+        space = TokenState::LEN,
+        seeds = [TOKEN_STATE_SEED],
+        bump
+    )]
     pub token_state: Account<'info, TokenState>,
 
-    pub mint: InterfaceAccount<'info, Mint>,
+    pub mint: Account<'info, Mint>,
 
-    #[account(seeds = [BLACKLIST_SEED], bump)]
-    pub blacklist: Account<'info, Blacklist>,
+    #[account(
+        mut,
+        seeds = [VAULT_SEED],
+        bump
+    )]
+    pub vault: Account<'info, TokenAccount>,
 
-    pub multisig: UncheckedAccount<'info>,
-    pub vault: UncheckedAccount<'info>,
     pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
     pub rent: Sysvar<'info, Rent>,
+
+    #[account(
+        init,
+        payer = payer,
+        space = Blacklist::space(100), // Maximum 100 blacklisted addresses
+        seeds = [BLACKLIST_SEED],
+        bump
+    )]
+    pub blacklist: Account<'info, Blacklist>,
+
+    /// CHECK: Multisig account is validated in the instruction
+    pub multisig: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
 pub struct MintByUser<'info> {
     pub user: Signer<'info>,
     pub token_state: Account<'info, TokenState>,
-    pub mint: UncheckedAccount<'info>,
-    pub payment_token: UncheckedAccount<'info>,
-    pub user_payment_account: UncheckedAccount<'info>,
-    pub user_token_account: UncheckedAccount<'info>,
-    pub vault: UncheckedAccount<'info>,
+    pub mint: Account<'info, Mint>,
+    pub payment_token: Account<'info, Mint>,
+    pub user_payment_account: Account<'info, TokenAccount>,
+    pub user_token_account: Account<'info, TokenAccount>,
+    pub vault: Account<'info, TokenAccount>,
+    pub blacklist: Account<'info, Blacklist>,
+    /// CHECK: Pyth price feed account is validated in the instruction
     pub sol_price_feed: UncheckedAccount<'info>,
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
@@ -551,45 +554,54 @@ pub struct MintByUser<'info> {
 
 #[derive(Accounts)]
 pub struct AdminBurn<'info> {
-    pub authority: UncheckedAccount<'info>,
+    pub admin: Signer<'info>,
     pub token_state: Account<'info, TokenState>,
+    /// CHECK: Multisig account is validated in the instruction
     pub multisig: UncheckedAccount<'info>,
-    pub mint: UncheckedAccount<'info>,
-    pub vault: UncheckedAccount<'info>,
-    pub premint_account: Option<UncheckedAccount<'info>>,
-    pub refund_account: UncheckedAccount<'info>,
+    pub mint: Account<'info, Mint>,
+    pub vault: Account<'info, TokenAccount>,
+    pub premint_account: Option<Account<'info, TokenAccount>>,
+    pub refund_account: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
 }
 
 #[derive(Accounts)]
 pub struct Pause<'info> {
+    /// CHECK: Authority is validated in the instruction
     pub authority: UncheckedAccount<'info>,
     pub token_state: Account<'info, TokenState>,
+    /// CHECK: Multisig account is validated in the instruction
     pub multisig: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
 pub struct Unpause<'info> {
+    /// CHECK: Authority is validated in the instruction
     pub authority: UncheckedAccount<'info>,
     pub token_state: Account<'info, TokenState>,
+    /// CHECK: Multisig account is validated in the instruction
     pub multisig: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
 pub struct UpdateMaxSupply<'info> {
+    /// CHECK: Authority is validated in the instruction
     pub authority: UncheckedAccount<'info>,
     pub token_state: Account<'info, TokenState>,
+    /// CHECK: Multisig account is validated in the instruction
     pub multisig: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
 pub struct UpdateBlacklist<'info> {
+    /// CHECK: Authority is validated in the instruction
     pub authority: UncheckedAccount<'info>,
     pub token_state: Account<'info, TokenState>,
 
     #[account(seeds = [BLACKLIST_SEED], bump)]
     pub blacklist: Account<'info, Blacklist>,
 
+    /// CHECK: Multisig account is validated in the instruction
     pub multisig: UncheckedAccount<'info>,
 }
 
@@ -597,8 +609,8 @@ pub struct UpdateBlacklist<'info> {
 pub struct PurchaseItem<'info> {
     pub user: Signer<'info>,
     pub token_state: Account<'info, TokenState>,
-    pub user_token_account: UncheckedAccount<'info>,
-    pub vault: UncheckedAccount<'info>,
+    pub user_token_account: Account<'info, TokenAccount>,
+    pub vault: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
 }
 
@@ -606,13 +618,12 @@ pub struct PurchaseItem<'info> {
 pub struct TransferHook<'info> {
     #[account(seeds = [BLACKLIST_SEED], bump)]
     pub blacklist: Account<'info, Blacklist>,
-
-    pub source: UncheckedAccount<'info>,
-    pub destination: UncheckedAccount<'info>,
+    pub source: Account<'info, TokenAccount>,
+    pub destination: Account<'info, TokenAccount>,
 }
 
 #[derive(Accounts)]
 pub struct VerifyReserve<'info> {
     pub token_state: Account<'info, TokenState>,
-    pub vault: UncheckedAccount<'info>,
+    pub vault: Account<'info, TokenAccount>,
 }

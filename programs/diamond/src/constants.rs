@@ -1,4 +1,6 @@
-use anchor_lang::prelude::*;
+use anchor_lang::prelude::Pubkey;
+
+// Remove unused import
 
 // Token configuration
 pub const DECIMALS: u8 = 9;
@@ -26,7 +28,11 @@ pub const MAX_PRICE_AGE: i64 = 60; // 60 seconds
 pub const PAUSE_COOLDOWN: i64 = 900; // 15 minutes in seconds
 
 // PDA seeds
-pub const TOKEN_STATE_SEED: &[u8] = b"token_state";
-pub const BLACKLIST_SEED: &[u8] = b"blacklist";
-pub const VAULT_SEED: &[u8] = b"vault";
+pub const TOKEN_STATE_SEED: &[u8] = b"token_state_v2";
+pub const BLACKLIST_SEED: &[u8] = b"blacklist_v2";
+pub const VAULT_SEED: &[u8] = b"vault_v2";
 pub const MULTISIG_SEED: &[u8] = b"multisig";
+
+// Token Mints
+pub const USDT_MINT: &str = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
+pub const USDT_PUBKEY: Pubkey = Pubkey::from_str_const(USDT_MINT);
