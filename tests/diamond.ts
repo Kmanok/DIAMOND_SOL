@@ -50,12 +50,12 @@ describe("diamond", () => {
 
     // Initialize test accounts
     [tokenState] = await PublicKey.findProgramAddress(
-      [Buffer.from("token_state")],
+      [Buffer.from("token_state_v2")],
       program.programId
     );
 
     [blacklist] = await PublicKey.findProgramAddress(
-      [Buffer.from("blacklist")],
+      [Buffer.from("blacklist_v2")],
       program.programId
     );
 
